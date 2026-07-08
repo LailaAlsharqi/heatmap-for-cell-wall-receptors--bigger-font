@@ -1,0 +1,241 @@
+# =============================================================================
+# Cell Wall Receptors Heatmap — Raw Fold Change
+# Metadata: HNC / LNC split + Mycoviral Infection annotation
+# Clustering: complete
+# =============================================================================
+
+library(dplyr)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(viridis)
+
+# =========================
+# 1. Read files
+# =========================
+meta <- read.csv(
+  "/Users/laial/Desktop/pm01analysis/metaviral2.csv",
+  check.names      = FALSE,
+  stringsAsFactors = FALSE,
+  fileEncoding     = "UTF-8-BOM")
+
+data <- read.csv(
+  "cellwallFoldchange.csv",
+  check.names      = FALSE,
+  stringsAsFactors = FALSE,
+  fileEncoding     = "UTF-8-BOM")
+
+colnames(meta)[1] <- "SampleID"
+colnames(data)[1] <- "SampleID"
+
+# =========================
+# 2. Clean Sample IDs
+# =========================
+meta$SampleID <- trimws(as.character(meta$SampleID))
+data$SampleID <- trimws(as.character(data$SampleID))
+
+data$SampleID[data$SampleID == "AF293"] <- "Af293"
+meta$SampleID[meta$SampleID == "AF293"] <- "Af293"
+
+# =========================
+# 3. Match samples
+# =========================
+common_samples <- intersect(data$SampleID, meta$SampleID)
+
+cat("Samples in data  :", nrow(data), "\n")
+cat("Samples in meta  :", nrow(meta), "\n")
+cat("Common samples   :", length(common_samples), "\n")
+cat("In data not meta :\n"); print(setdiff(data$SampleID, meta$SampleID))
+cat("In meta not data :\n"); print(setdiff(meta$SampleID, data$SampleID))
+
+data_filt <- data %>% filter(SampleID %in% common_samples)
+meta_filt <- meta %>% filter(SampleID %in% common_samples)
+
+data_filt <- data_filt[match(common_samples, data_filt$SampleID), ]
+meta_filt <- meta_filt[match(common_samples, meta_filt$SampleID), ]
+
+rownames(data_filt) <- data_filt$SampleID; data_filt$SampleID <- NULL
+rownames(meta_filt) <- meta_filt$SampleID; meta_filt$SampleID <- NULL
+
+stopifnot(all(rownames(data_filt) == rownames(meta_filt)))
+
+# =========================
+# 4. Reorder features
+# Hyphae → Swollen → Resting
+# =========================
+desired_order <- c(
+  "Mincle(Hyphae)",   "Mincle(Swollen)",   "Mincle(Resting)",
+  "Dectin1(Hyphae)",  "Dectin1(Swollen)",  "Dectin1(Resting)",
+  "TLR4(Hyphae)",     "TLR4(Swollen)",     "TLR4(Resting)")
+
+desired_order <- desired_order[desired_order %in% colnames(data_filt)]
+cat("Features found:", length(desired_order), "of 9\n")
+
+data_filt <- data_filt[, desired_order, drop = FALSE]
+
+# =========================
+# 5. Matrix
+# =========================
+mat_final <- t(as.matrix(data_filt))
+mat_final <- apply(mat_final, c(1, 2), as.numeric)
+
+cat("Matrix:", nrow(mat_final), "features x", ncol(mat_final), "samples\n")
+
+# =========================
+# 6. Row split
+# =========================
+receptor_labels <- sub("\\(.*", "", rownames(mat_final))
+row_split <- factor(receptor_labels, levels = c("Mincle", "Dectin1", "TLR4"))
+
+# =========================
+# 7. Metadata factors
+# =========================
+
+# ✅ Create Nutritional Capacity from Group column
+meta_filt$`Nutritional Capacity` <- factor(
+  trimws(as.character(meta_filt$Group)),
+  levels = c("HNC", "LNC"))
+
+meta_filt$`Mycoviral Infection` <- factor(
+  trimws(as.character(meta_filt$`Mycoviral Infection`)),
+  levels = c("Uninfected", "Infected"))
+
+meta_filt$ITR <- factor(
+  trimws(as.character(meta_filt$ITR)),
+  levels = c("Susceptible", "Resistant"))
+
+meta_filt$`Aspergillosis Type` <- factor(
+  trimws(as.character(meta_filt$`Aspergillosis Type`)),
+  levels = c("ABPA", "CPA", "Colonisation", "Reference"))
+
+meta_filt$Genotype <- trimws(as.character(meta_filt$Genotype))
+meta_filt$Genotype[meta_filt$Genotype == "WT/1R"] <- "Wildtype"
+meta_filt$Genotype <- factor(meta_filt$Genotype)
+
+# ✅ Column split by Nutritional Capacity
+col_split <- factor(
+  meta_filt$`Nutritional Capacity`,
+  levels = c("HNC", "LNC"))
+
+# =========================
+# 8. Annotation
+# =========================
+annotation_df <- meta_filt[, c(
+  "Nutritional Capacity",
+  "Mycoviral Infection",
+  "ITR",
+  "Aspergillosis Type",
+  "Genotype"), drop = FALSE]
+
+annotation_colors <- list(
+  `Nutritional Capacity` = c(
+    "HNC" = "#E64B35",
+    "LNC" = "#4DBBD5"
+  ),
+  `Mycoviral Infection` = c(
+    "Infected"   = "darkslategrey",
+    "Uninfected" = "darkolivegreen3"
+  ),
+  `ITR` = c(
+    "Susceptible" = "#00A087",
+    "Resistant"   = "#3C5488"
+  ),
+  `Aspergillosis Type` = c(
+    "ABPA"         = "#91D1C2",
+    "CPA"          = "#F39B7F",
+    "Colonisation" = "#8491B4",
+    "Reference"    = "#7E6148"
+  ),
+  `Genotype` = setNames(
+    viridis(length(levels(meta_filt$Genotype)), option = "D"),
+    levels(meta_filt$Genotype)
+  ))
+
+ha <- HeatmapAnnotation(
+  df                 = annotation_df,
+  col                = annotation_colors,
+  annotation_name_gp = gpar(fontsize = 9, fontface = "bold"),
+  simple_anno_size   = unit(0.4, "cm"),
+  gap                = unit(1, "mm"),
+  show_legend        = TRUE)
+
+stopifnot(ncol(mat_final) == nrow(annotation_df))
+
+# =========================
+# 9. Colour scale
+# =========================
+col_fun <- colorRamp2(
+  c(0, 1.5, 3, 4.5, 6),
+  c("#3B4CC0", "white", "#F4A3A3", "#D73027", "#7F0000"))
+
+value_legend <- Legend(
+  title         = "Fold Change",
+  col_fun       = col_fun,
+  at            = c(0, 1.5, 3, 4.5, 6),
+  labels        = c("0", "1.5", "3", "4.5", "6"),
+  direction     = "vertical",
+  title_gp      = gpar(fontsize = 9, fontface = "bold"),
+  labels_gp     = gpar(fontsize = 7),
+  legend_height = unit(3.5, "cm"),
+  grid_width    = unit(4, "mm"))
+
+# =========================
+# 10. Heatmap
+# =========================
+ht <- Heatmap(
+  mat_final,
+  name                        = "Fold Change",
+  col                         = col_fun,
+  show_heatmap_legend         = FALSE,
+  row_split                   = row_split,
+  row_gap                     = unit(2, "mm"),
+  row_title_gp                = gpar(fontsize = 11, fontface = "bold"),
+  row_title_rot               = 0,
+  column_split                = col_split,
+  column_gap                  = unit(2, "mm"),
+  column_title_gp             = gpar(fontsize = 10, fontface = "bold"),
+  cluster_rows                = FALSE,
+  cluster_columns             = TRUE,
+  clustering_distance_columns = "euclidean",
+  clustering_method_columns   = "complete",
+  cluster_column_slices       = FALSE,
+  top_annotation              = ha,
+  show_row_dend               = FALSE,
+  show_column_dend            = FALSE,
+  show_row_names              = TRUE,
+  show_column_names           = TRUE,
+  row_names_gp                = gpar(fontsize = 8),
+  column_names_gp             = gpar(fontsize = 6),
+  column_names_rot            = 90,
+  border                      = FALSE,
+  rect_gp                     = gpar(col = "white", lwd = 0.4),
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(
+      sprintf("%.1f", mat_final[i, j]),
+      x, y,
+      gp = gpar(fontsize = 4, col = "black"))
+  })
+
+# =========================
+# 11. Save
+# =========================
+save_ht <- function(filename, device = "pdf", w = 18, h = 8) {
+  if (device == "pdf") {
+    pdf(filename, width = w, height = h)
+  } else {
+    png(filename, width = w * 300, height = h * 300, res = 300)
+  }
+  draw(
+    ht,
+    heatmap_legend_side    = "right",
+    annotation_legend_side = "right",
+    annotation_legend_list = list(value_legend),
+    merge_legends          = TRUE)
+  dev.off()
+  message("saved: ", filename)
+}
+
+save_ht("heatmap_cellwall_HNC_LNC_split.pdf", device = "pdf")
+save_ht("heatmap_cellwall_HNC_LNC_split.png", device = "png")
+
+message("Done!")
